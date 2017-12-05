@@ -35,6 +35,8 @@ var particleCount = 1000;
 
 var timeScale = 1.0;
 
+var supportsWebGL2 = false;
+
 
 // support for up to RT_TEX_SIZE * RT_TEX_SIZE number of particles
 // 128x128 = 16384 particles
@@ -55,7 +57,7 @@ function start() {
 
     canvas.width  = window.innerWidth;
     canvas.height = window.innerHeight;
-    
+
     initWebGL(canvas);
 
     // only continue if webgl is working properly
@@ -67,13 +69,13 @@ function start() {
 
         gl.disable(gl.BLEND);
 
-        initBuffers();  
-        initParticleData();      
+        initBuffers();
+        initParticleData();
         initMaterials();
         initUI();
-        
+
         // start the core loop cycle
-        requestAnimationFrame(tick);     
+        requestAnimationFrame(tick);
     }
 }
 
@@ -87,9 +89,24 @@ function initWebGL() {
     gl = null;
 
     try {
-        gl = canvas.getContext("experimental-webgl", { alpha: false });
+        gl = canvas.getContext("webgl2", { alpha: false });
     }
     catch(e) {
+
+    }
+
+    if(gl)
+    {
+        supportsWebGL2 = true;
+    }
+    else
+    {
+        try {
+            gl = canvas.getContext("experimental-webgl", {alpha: false});
+        }
+        catch(e) {
+            
+        }
     }
 
     // If we don't have a GL context, give up now
@@ -106,39 +123,39 @@ function initWebGL() {
 // creates batched buffers to hold
 // maximum number of cubes
 //
-function initBuffers() 
+function initBuffers()
 {
     //maxium particles that can be represented in the textures
     var maxparticleCount = RT_TEX_SIZE * RT_TEX_SIZE;
-  
+
     bufferCount = Math.ceil( maxparticleCount / MAX_PER_BUFFER );
-  
+
     cubeVerticesBuffers.length = bufferCount;
-  
+
     var gridSize = Math.ceil( Math.sqrt( maxparticleCount ) );
-  
+
     for( var b = 0; b < bufferCount; b++ )
     {
         cubeVerticesBuffers[b] = gl.createBuffer();
-    
+
         // setup batched vertex buffer
         gl.bindBuffer(gl.ARRAY_BUFFER, cubeVerticesBuffers[b]);
-    
+
         var batchedVertices = [];
         batchedVertices.length = vertices.length * Math.min( MAX_PER_BUFFER, maxparticleCount - b * MAX_PER_BUFFER );
-    
+
         // each cube in buffer will be spaced out on xz grid - so shader can differentiate between them
         for(var i=0; i < batchedVertices.length; i+=3 )
         {
             var index = i % vertices.length;
             var pos = vertices.slice(index,index + 3);
-      
+
             // index of cube out of all cubes through all buffers
             var cubedex = Math.floor( ( i + b * MAX_PER_BUFFER * vertices.length ) / vertices.length );
-      
+
             pos[0] = pos[0] + ( cubedex % gridSize ) * 3;
             pos[2] = pos[2] + Math.floor( cubedex / gridSize ) * 3;
-      
+
             batchedVertices[i] = pos[0];
             batchedVertices[i+1] = pos[1];
             batchedVertices[i+2] = pos[2];
@@ -146,24 +163,24 @@ function initBuffers()
 
         gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(batchedVertices), gl.STATIC_DRAW);
     }
-      
 
-    cubeVerticesIndexBuffer = gl.createBuffer();    
-      
+
+    cubeVerticesIndexBuffer = gl.createBuffer();
+
     // setup batched elements
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, cubeVerticesIndexBuffer);
 
 
     var batchedElements = [];
     batchedElements.length = cubeVertexIndices.length * MAX_PER_BUFFER;
-  
+
     for( var i=0; i < batchedElements.length; i++ )
     {
         var index = i % cubeVertexIndices.length;
-    
+
         // index of cube out of cubes in this current buffer
         var cubedex = Math.floor( i / cubeVertexIndices.length );
-    
+
         batchedElements[i] = cubeVertexIndices[index] + cubedex * vertices.length / 3; // 8 vertex points in a cube - aka ( vertices / 3 )
     }
 
@@ -177,120 +194,135 @@ function initBuffers()
 // initializes framebuffers, render textures, and materials
 // used for keep track of particle positions & velocities
 //
-function initParticleData() 
+function initParticleData()
 {
-  
+
+
+    var texelData = gl.FLOAT;
+    var internalFormat = gl.RGBA;
+
     // need either floating point, or half floating point precision for holding position and velocity data
-    var ext = gl.getExtension("OES_texture_float");
-    var texelData = gl.UNSIGNED_BYTE;
-  
-    if( ext != null )
+    if( supportsWebGL2 )
     {
-        texelData = gl.FLOAT;
-    }
-    else
-    {
-        ext = gl.getExtension("OES_texture_half_float");
-        if( ext != null )
-        {
-            texelData = ext.HALF_FLOAT_OES;
-        }
-        else
+        var ext = gl.getExtension("EXT_color_buffer_float");
+        if( ext == null )
         {
             alert("Device & browser needs to support floating point or half floating point textures in order to work properly");
         }
+        else
+        {
+            internalFormat = gl.RGBA32F;
+        }
     }
-    
+    else
+    {
+        var ext = gl.getExtension("OES_texture_float");
+        if( ext == null )
+        {
+            ext = gl.getExtension("OES_texture_half_float");
+            if( ext != null )
+            {
+                texelData = ext.HALF_FLOAT_OES;
+            }
+            else
+            {
+                alert("Device & browser needs to support floating point or half floating point textures in order to work properly");
+            }
+        }
+    }
+
+
+
     // setup framebuffer to render particle postiions & lifetime into texture : rgb = xyz, a = lifetime
     rtPosBuffer = gl.createFramebuffer();
     gl.bindFramebuffer(gl.FRAMEBUFFER, rtPosBuffer);
-  
+
     rtPosBuffer.width = RT_TEX_SIZE;
     rtPosBuffer.height = RT_TEX_SIZE;
-  
+
     rtPosTexture = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, rtPosTexture);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, RT_TEX_SIZE, RT_TEX_SIZE, 0, gl.RGBA, texelData, null);
+    gl.texImage2D(gl.TEXTURE_2D, 0, internalFormat, RT_TEX_SIZE, RT_TEX_SIZE, 0, gl.RGBA, texelData, null);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, rtPosTexture, 0);
-  
-  
+
+
     // setup framebuffer to render particle velocities into texture : rgb = xyz, a = random seed
     rtVelBuffer  = gl.createFramebuffer();
     gl.bindFramebuffer(gl.FRAMEBUFFER, rtVelBuffer);
-  
+
     rtVelBuffer.width = RT_TEX_SIZE;
     rtVelBuffer.height = RT_TEX_SIZE;
-  
+
     rtVelTexture = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, rtVelTexture);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, RT_TEX_SIZE, RT_TEX_SIZE, 0, gl.RGBA, texelData, null);
+    gl.texImage2D(gl.TEXTURE_2D, 0, internalFormat, RT_TEX_SIZE, RT_TEX_SIZE, 0, gl.RGBA, texelData, null);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, rtVelTexture, 0);
 
 
     // setup framebuffer as intermediate - to copy contents into position & velocity textures
     rtCopyBuffer = gl.createFramebuffer();
     gl.bindFramebuffer(gl.FRAMEBUFFER, rtCopyBuffer);
-  
+
     rtCopyBuffer.width = RT_TEX_SIZE;
     rtCopyBuffer.height = RT_TEX_SIZE;
-  
+
     rtCopyTexture = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, rtCopyTexture );
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, RT_TEX_SIZE, RT_TEX_SIZE, 0, gl.RGBA, texelData, null);
+    gl.texImage2D(gl.TEXTURE_2D, 0, internalFormat, RT_TEX_SIZE, RT_TEX_SIZE, 0, gl.RGBA, texelData, null);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, rtCopyTexture, 0);
-  
+
 
     // create buffers for rendering images on quads
     frameVerticesBuffer = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, frameVerticesBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(quadVertices), gl.STATIC_DRAW);
-  
+
     frameIndexBuffer = gl.createBuffer();
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, frameIndexBuffer);
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(quadVertexIndices), gl.STATIC_DRAW);
-  
+
     gl.bindTexture(gl.TEXTURE_2D, null);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    
-    
+
+
     // setup data materials
     var quadVS = getShader(gl, "screenquad-vs");
     var posFS = getShader(gl, "position-fs");
     var velFS = getShader(gl, "velocity-fs");
     var copyFS = getShader(gl, "copy-fs");
-    
+
     // material to update position
-    posDataMaterial = new Material(quadVS, posFS);   
+    posDataMaterial = new Material(quadVS, posFS);
     posDataMaterial.setTexture("uPosTex", rtPosTexture );
     posDataMaterial.setTexture("uVelTex", rtVelTexture );
     posDataMaterial.addVertexAttribute("aVertexPosition");
-    
+
     // material to update velocity
-    velDataMaterial = new Material(quadVS, velFS);   
+    velDataMaterial = new Material(quadVS, velFS);
     velDataMaterial.setTexture("uPosTex", rtPosTexture );
     velDataMaterial.setTexture("uVelTex", rtVelTexture );
     velDataMaterial.addVertexAttribute("aVertexPosition");
-    
+
     // material to copy 1 texture into another
-    copyMaterial = new Material(quadVS, copyFS);   
+    copyMaterial = new Material(quadVS, copyFS);
     copyMaterial.setTexture("uCopyTex", rtCopyTexture );
     copyMaterial.addVertexAttribute("aVertexPosition");
-    
-    
+
+
     // initialize data into position and velocity textures - random start lifetimes & seeds
     var initPosFS = getShader(gl, "initdata-fs");
     var initDataMaterial = new Material( quadVS, initPosFS );
     initDataMaterial.addVertexAttribute("aVertexPosition");
-    
+
     gl.viewport(0, 0, RT_TEX_SIZE, RT_TEX_SIZE);
     gl.clearColor(0.0, 0.0, 0.0, 1.0);
-    
+
     renderDataBuffer( rtPosBuffer, initDataMaterial );
     renderDataBuffer( rtVelBuffer, initDataMaterial );
 }
@@ -300,15 +332,15 @@ function initParticleData()
 //
 // Initializes materials for cubes
 //
-function initMaterials() 
+function initMaterials()
 {
     particleMaterials.length = 3;
-        
+
     var litoutlineFS = getShader(gl, "litoutline-fs");
-    var litoutlineVS = getShader(gl, "litoutline-vs");   
-    
+    var litoutlineVS = getShader(gl, "litoutline-vs");
+
     var basicVS = getShader(gl, "basic-vs" );
-    
+
     var cubeframeFS = getShader(gl, "cubeframe-fs" );
     var cornercolorFS = getShader(gl, "cornercolor-fs" );
 
@@ -316,7 +348,7 @@ function initMaterials()
     particleMaterials[1] = new Material( basicVS, cubeframeFS );
     particleMaterials[2] = new Material( basicVS, cornercolorFS );
 
-    
+
     perspectiveMatrix = makePerspective(45, canvas.width/canvas.height, 0.1, 1000.0);
 
     for( var i=0; i < particleMaterials.length; i++ )
@@ -338,58 +370,58 @@ function initUI()
 {
     var cubeSlider = document.getElementById("cubeSlider");
     var cubeText = document.getElementById("cubeCount");
-   
+
     cubeSlider.onchange = function() {
       var sliderValue = parseInt(cubeSlider.value) * 0.01;
       sliderValue = sliderValue * sliderValue;
       particleCount = Math.floor( sliderValue * 9990 + 10);
       cubeText.innerText = particleCount;
     };
-    
+
     cubeSlider.onchange();
-    
-    
+
+
     var randomSlider = document.getElementById("randomSlider");
     var randomText = document.getElementById("randomness");
-    
+
     randomSlider.onchange = function() {
         var value = parseInt( randomSlider.value ) * 0.01;
         var randomness = value;
         randomText.innerText = randomSlider.value + "%";
-        
+
         velDataMaterial.setFloat("uRandomness", randomness );
     }
-    
+
     randomSlider.onchange();
-    
-    
+
+
     var gravitySlider = document.getElementById("gravitySlider");
     var gravityText = document.getElementById("gravity");
-    
+
     gravitySlider.onchange = function() {
         var value = parseInt( gravitySlider.value );
         var gravity = value;
         gravityText.innerHTML = "-" + gravity + "m/s<sup>2</sup>";
-        
+
         velDataMaterial.setFloat("uGravityScale", gravity );
     }
-    
+
     gravitySlider.onchange();
-    
-    
+
+
     var timeSlider = document.getElementById("timeSlider");
     var timeText = document.getElementById("timeScale");
-    
+
     timeSlider.onchange = function() {
         timeScale = parseInt( timeSlider.value ) * 0.01;
         timeText.innerText = Math.floor( timeScale * 100.0 ) + "%";
     }
-    
+
     timeSlider.onchange();
-    
-    
+
+
     var shaderButton = document.getElementById("shaderButton");
-    
+
     shaderButton.onclick = function() {
         particleMaterialIndex = ( particleMaterialIndex + 1 ) % particleMaterials.length;
     }
@@ -406,49 +438,49 @@ function renderDataBuffer( dataBuffer, dataMaterial )
 {
     // setup quad geometry
     gl.bindBuffer(gl.ARRAY_BUFFER, frameVerticesBuffer);
-    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);  
+    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, frameIndexBuffer);
-    
-    
+
+
     // render data into copy texture
     gl.bindFramebuffer( gl.FRAMEBUFFER, rtCopyBuffer );
     gl.clear( gl.COLOR_BUFFER_BIT );
-    
+
     dataMaterial.apply();
-        
+
     gl.drawElements(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, 0);
-    
-    
+
+
     // render copy texture into data texture
     gl.bindFramebuffer( gl.FRAMEBUFFER, dataBuffer );
     gl.clear( gl.COLOR_BUFFER_BIT );
-  
+
     copyMaterial.apply();
-    
+
     gl.drawElements(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, 0);
-  
+
 }
 
 //
 // renderParticleData
 //
-// Renders updates into the particle position & velocity data textures 
+// Renders updates into the particle position & velocity data textures
 //
-function renderParticleData(deltaTime) 
+function renderParticleData(deltaTime)
 {
     gl.viewport(0, 0, RT_TEX_SIZE, RT_TEX_SIZE);
     gl.clearColor(0.0, 0.0, 0.0, 0.0);
-    
-    velDataMaterial.setFloat("uDeltaTime", deltaTime );  
+
+    velDataMaterial.setFloat("uDeltaTime", deltaTime );
     posDataMaterial.setFloat("uDeltaTime", deltaTime );
-    
+
     renderDataBuffer( rtVelBuffer, velDataMaterial );
     renderDataBuffer( rtPosBuffer, posDataMaterial );
-    
+
     //renderDataBuffer( null, posDataMaterial );
-  
+
     // reset framebuffer to screen
-    gl.bindFramebuffer( gl.FRAMEBUFFER, null ); 
+    gl.bindFramebuffer( gl.FRAMEBUFFER, null );
     gl.viewport(0, 0, canvas.width, canvas.height);
 }
 
@@ -457,14 +489,14 @@ function renderParticleData(deltaTime)
 //
 // Draw the scene.
 //
-function render( deltaTime ) 
-{ 
+function render( deltaTime )
+{
     renderParticleData( deltaTime );
-  
+
     gl.clearColor( 1.0, 1.0, 1.0, 1.0 );
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
- 
+
     particleMaterials[particleMaterialIndex].apply();
 
     for( var b=0; b < bufferCount; b++ )
@@ -473,21 +505,21 @@ function render( deltaTime )
         {
             break;
         }
-    
+
         // Bind all cube vertices
         gl.bindBuffer(gl.ARRAY_BUFFER, cubeVerticesBuffers[b]);
         gl.vertexAttribPointer(particleMaterials[particleMaterialIndex].getVertexAttribute("aVertexPosition"), 3, gl.FLOAT, false, 0, 0);
 
-    
+
         var elementCount = Math.min( particleCount - b * MAX_PER_BUFFER, MAX_PER_BUFFER );
-    
+
         // Draw the cubes.
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, cubeVerticesIndexBuffer);
         gl.drawElements(gl.TRIANGLES, 36 * elementCount, gl.UNSIGNED_SHORT, 0);
     }
 }
 
-// 
+//
 // tick
 //
 // core loop function
@@ -496,26 +528,26 @@ function render( deltaTime )
 function tick( currentTime )
 {
     var deltaTime = 0;
-    if (lastUpdateTime) 
+    if (lastUpdateTime)
     {
         deltaTime = ( currentTime - lastUpdateTime ) * 0.001 * timeScale; // in seconds
-        
+
         // prevent large animation jump from switching tabs/minimizing window
         if( deltaTime > 1.0 )
         {
             deltaTime = 0.0;
         }
-            
+
     }
     lastUpdateTime = currentTime;
-    
+
     velDataMaterial.setFloat("uTime", currentTime );
-    
+
     resize();
-    
+
     render( deltaTime );
-    
-    
+
+
     requestAnimationFrame( tick );
 }
 
@@ -525,7 +557,7 @@ function tick( currentTime )
 // loads a shader program by scouring the current document,
 // looking for a script with the specified ID.
 //
-function getShader(gl, id) 
+function getShader(gl, id)
 {
     var shaderScript = document.getElementById(id);
 
@@ -569,7 +601,7 @@ function getShader(gl, id)
     return shader;
 }
 
-function resize() 
+function resize()
 {
 
   var displayWidth  = window.innerWidth;
@@ -584,12 +616,12 @@ function resize()
     canvas.height = displayHeight;
 
     perspectiveMatrix = makePerspective(45, canvas.width/canvas.height, 0.1, 1000.0);
-    
+
     for( var i=0; i < particleMaterials.length; i++ )
     {
         particleMaterials[i].setMatrix("uPMatrix", perspectiveMatrix );
     }
-    
+
     // Set the viewport to match
     gl.viewport(0, 0, canvas.width,canvas.height);
   }
@@ -651,28 +683,28 @@ var quadVertices = [
 ];
 
 var quadVertexIndices = [
-    0,  1,  2,      
+    0,  1,  2,
     0,  2,  3
 ];
 
 var normalMatrix = [
-    1, 0, 0, 0, 
-    0, 1, 0, 20, 
-    0, 0, 1, 100, 
+    1, 0, 0, 0,
+    0, 1, 0, 20,
+    0, 0, 1, 100,
     0, 0, 0, 1
 ];
 
 var mvMatrix = [
-    1, 0, 0, 0, 
-    0, 1, 0, 0, 
-    0, 0, 1, 0, 
+    1, 0, 0, 0,
+    0, 1, 0, 0,
+    0, 0, 1, 0,
     0, -20, -100, 1
 ];
 
 var perspectiveMatrix = [
-    1.8106601717, 0, 0, 0, 
-    0, 2.4142135623, 0, 0, 
-    0, 0, -1.000200020, -1, 
+    1.8106601717, 0, 0, 0,
+    0, 2.4142135623, 0, 0,
+    0, 0, -1.000200020, -1,
     0, 0, -0.200020002, 0
 ];
 
